@@ -1,0 +1,50 @@
+# =========================
+# Python (backend)
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual env
+venv/
+.env
+
+# SQLite DB
+*.db
+
+# Logs
+*.log
+
+# =========================
+# Node / Frontend
+# =========================
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Docker
+# =========================
+docker-compose.override.yml
+
+# =========================
+# Binaries (shown in root)
+# =========================
+*.exe
+
+# =========================
+# Misc
+# =========================
+coverage/
+.cache/
