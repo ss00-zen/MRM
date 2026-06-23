@@ -18,22 +18,14 @@ const Dashboard = () => {
   };
 
   useEffect(() => {
-    // ✅ Initial load
+    // ✅ Initial load ONLY (no polling)
     fetchModels();
-
-    // ✅ Polling fallback (handles missed WebSocket events)
-    const interval = setInterval(() => {
-      fetchModels();
-    }, 3000);
-
-    return () => clearInterval(interval);
   }, []);
 
   return (
     <div style={{ padding: "20px" }}>
       <h2>Model Dashboard</h2>
 
-      {/* Navigation buttons */}
       <div style={{ marginBottom: "15px", display: "flex", gap: "10px" }}>
         <button onClick={() => navigate("/validation")}>
           Validation Queue

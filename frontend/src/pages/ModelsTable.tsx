@@ -10,40 +10,41 @@ const ModelsTable = ({ models = [], refresh }: any) => {
       `http://127.0.0.1:8000/api/models/${model_id}/monitor`,
       { method: "POST" }
     );
-
-    if (refresh) {
-      await refresh(); // ✅ immediate refresh
-    }
+    // Do NOT call refresh here → WS will handle it
   };
 
   useEffect(() => {
-    if (!wsRef.current) {
-      const ws = new WebSocket("ws://127.0.0.1:8000/ws/models");
+    // ✅ ✅ CRITICAL: Prevent multiple WebSocket instances
+    if (wsRef.current) return;
 
-      ws.onopen = async () => {
-        console.log("✅ WS connected");
-        if (refresh) {
-          await refresh(); // ✅ reload on connect
-        }
-      };
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws/models");
 
-      ws.onmessage = async (event) => {
-        const msg = JSON.parse(event.data);
+    ws.onopen = () => {
+      console.log("✅ WS connected");
+    };
 
-        if (msg.type === "model_update" && refresh) {
-          console.log("🔄 Updating table...");
-          await refresh();
-          setTimeout(() => refresh(), 200);
-        }
-      };
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data);
 
-      ws.onclose = () => console.log("❌ WS closed");
+      if (msg.type === "model_update" && refresh) {
+        console.log("🔄 Updating table...");
+        await refresh(); // ✅ only refresh on real events
+      }
+    };
 
-      wsRef.current = ws;
-    }
+    ws.onerror = (err) => {
+      console.error("❌ WS error:", err);
+    };
+
+    ws.onclose = () => {
+      console.log("❌ WS closed");
+      wsRef.current = null;
+    };
+
+    wsRef.current = ws;
 
     return () => {
-      wsRef.current?.close();
+      ws.close();
       wsRef.current = null;
     };
   }, []);
@@ -67,7 +68,6 @@ const ModelsTable = ({ models = [], refresh }: any) => {
             <td>{m.model_name}</td>
             <td>{m.model_type}</td>
 
-            {/* ✅ Active / No Active Tickets */}
             <td
               style={{
                 color: m.has_open_incidents ? "red" : "green",

@@ -16,99 +16,169 @@ class MonitoringAgent:
         try:
             self.llm_client = NvidiaLLMClient()
         except Exception as e:
-            print("LLM client not initialized:", str(e))
+            print("LLM init failed:", str(e))
             self.llm_client = None
 
     async def run(self, context):
+        state = context["state"]
+        memory = context["memory"]
+
         print("[Monitoring Agent]")
 
-        state = context.get("state", {})
-        memory = context.get("memory", {})
-
-        state.setdefault("performance_metrics", {})
         state.setdefault("reason", [])
-        state.setdefault("audit_log_entries", [])
-        state.setdefault("threshold_breached", False)
         state.setdefault("errors", [])
-        state.setdefault("validation_status", "draft")
+        state.setdefault("audit_log_entries", [])
         state.setdefault("jira_ticket_key", None)
-        state.setdefault("sr117_compliant", False)
-
-        model_id = state.get("model_id")
+        state.setdefault("agent_explanations", {})
 
         try:
-            metrics = await self.sql_client.get_all_latest_metrics(model_id)
+            # ✅ Safe metric fetch
+            metrics = await self.sql_client.get_all_latest_metrics(state["model_id"]) or {}
+            
+            drift = float(
+                metrics.get("psi") or
+                metrics.get("PSI") or
+                metrics.get("psi_score") or
+                state.get("drift_score") or   # ✅ important fallback
+                0.0
+            )
 
-            if not isinstance(metrics, dict):
-                raise Exception("Invalid metrics response")
-
-            drift_val = metrics.get("psi") or metrics.get("PSI")
-
-            if drift_val is not None:
-                drift = float(drift_val)
-            else:
-                drift = float(state.get("drift_score", 0.0))
 
             state["drift_score"] = drift
             state["performance_metrics"] = metrics
             memory["last_drift"] = drift
 
-            incidents = []
+            # ✅ Fetch incidents safely
+            incidents = await self.jira_client.get_all_incidents(state["model_id"])
 
+            # ✅ ✅ FIX: normalize response (CRITICAL)
+            if isinstance(incidents, dict):
+                incidents = [incidents]
+            elif isinstance(incidents, str):
+                incidents = []
+            elif not isinstance(incidents, list):
+                incidents = []
+
+            # ✅ Drift logic
             if drift > DRIFT_THRESHOLD:
                 state["threshold_breached"] = True
                 state["sr117_compliant"] = False
-
-                incidents = await self.jira_client.get_all_incidents(model_id)
-
-                existing = None
-
-                if isinstance(incidents, list):
-                    active = [
+                print("RAW INCIDENTS:", incidents)
+                active = [
+                    
                         i for i in incidents
-                        if i.get("status") != "approval"
-                    ]
-                    if active:
-                        active.sort(
-                            key=lambda x: x.get("created_at", ""),
-                            reverse=True
-                        )
-                        existing = active[0]
+                            if isinstance(i, dict)
+                            and i.get("key")        # ✅ must have key
+                            and i.get("status")     # ✅ must have status
+                            and i.get("status") not in ["approval", "approved", "closed"]
 
-                if existing:
-                    state["jira_ticket_key"] = existing["key"]
-                    state["validation_status"] = existing.get("status", "intake")
+                ]
+                print("FILTERED ACTIVE INCIDENTS:", active)
 
+                if active:
+                    latest = active[0]
+                    state["jira_ticket_key"] = latest.get("key")
+                    state["validation_status"] = latest.get("status")
                 else:
                     ticket = await self.jira_client.create_validation_ticket(
-                        model_id=model_id,
+                        model_id=state["model_id"],
                         validation_type="drift_incident"
                     )
 
-                    state["jira_ticket_key"] = ticket["key"]
-                    state["validation_status"] = ticket.get("status", "intake")
+                    if isinstance(ticket, dict):
+                        state["jira_ticket_key"] = ticket.get("key")
+                        state["validation_status"] = ticket.get("status")
 
-                    state["audit_log_entries"].append(
-                        f"JIRA-CREATED-{ticket['key']}"
-                    )
-
-                state["reason"].append(
-                    f"Drift {drift} exceeded threshold"
-                )
+                        state["audit_log_entries"].append(
+                            f"JIRA-CREATED-{ticket.get('key')}"
+                        )
 
             else:
                 state["threshold_breached"] = False
                 state["sr117_compliant"] = True
 
-                state["reason"].append(
-                    f"Drift {drift} within threshold"
-                )
+            # ✅ ✅ LLM explainability
+            explanation = await self._llm_explain(
+                state["model_id"],
+                drift,
+                state["threshold_breached"],
+                metrics,
+                incidents,
+            )
+
+            state["agent_explanations"]["monitoring"] = explanation
+            state["reason"].append(
+                explanation.get("summary", "Monitoring complete")
+            )
+
+            print("=== MONITORING LLM OUTPUT ===")
+            print(explanation)
 
         except Exception as e:
-            print("MONITORING ERROR:", str(e))
+            print("Monitoring error:", str(e))
             state["errors"].append(str(e))
 
         context["state"] = state
         context["memory"] = memory
-
         return context
+
+    async def _llm_explain(self, model_id, drift, breached, metrics, incidents):
+        fallback = {
+            "summary": f"Drift = {drift}, breached = {breached}",
+            "root_cause": "Unavailable",
+            "impact": "Basic threshold evaluation.",
+            "recommended_action": "Review model.",
+            "confidence": "low"
+        }
+
+        if not self.llm_client:
+            return fallback
+
+        prompt = f"""
+You are a model monitoring expert.
+
+Model ID: {model_id}
+Drift: {drift}
+Threshold breached: {breached}
+
+Metrics:
+{json.dumps(metrics)}
+
+Incidents:
+{json.dumps(incidents)}
+
+Explain:
+- Root cause of drift
+- Impact
+- Recommended action
+
+Return JSON:
+{{
+  "summary": "",
+  "root_cause": "",
+  "impact": "",
+  "recommended_action": "",
+  "confidence": "low|medium|high"
+}}
+"""
+
+        try:
+            result = await self.llm_client.generate(
+                system_prompt="Model monitoring analysis",
+                user_prompt=prompt
+            )
+
+            # ✅ handle string output
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except Exception:
+                    return fallback
+
+            if isinstance(result, dict):
+                return result
+
+        except Exception as e:
+            print("LLM ERROR:", str(e))
+
+        return fallback

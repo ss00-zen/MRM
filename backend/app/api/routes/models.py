@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import select, update, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.supervisor import SupervisorAgent
@@ -23,11 +23,7 @@ class MetricRequest(BaseModel):
 
 # ✅ Insert metric
 @router.post("/{model_id}/metrics")
-async def insert_metric(
-    model_id: str,
-    request: MetricRequest,
-    db: AsyncSession = Depends(get_db),
-):
+async def insert_metric(model_id: str, request: MetricRequest, db: AsyncSession = Depends(get_db)):
     model = await db.get(ModelInventory, model_id)
 
     if not model:
@@ -74,12 +70,11 @@ async def insert_metric(
             )
         )
 
-        audit = AuditLog(
+        db.add(AuditLog(
             model_id=model_id,
             event_type="metric_ingestion_supervisor_run",
             event_payload=state,
-        )
-        db.add(audit)
+        ))
 
         await db.commit()
 
@@ -93,10 +88,7 @@ async def insert_metric(
 
 # ✅ Get metrics
 @router.get("/{model_id}/metrics")
-async def get_metrics(
-    model_id: str,
-    db: AsyncSession = Depends(get_db),
-):
+async def get_metrics(model_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(ModelMetricsHistory)
         .where(ModelMetricsHistory.model_id == model_id)
@@ -115,12 +107,9 @@ async def get_metrics(
     ]
 
 
-# ✅ Manual monitor trigger
+# ✅ Monitor trigger
 @router.post("/{model_id}/monitor")
-async def run_monitor(
-    model_id: str,
-    db: AsyncSession = Depends(get_db),
-):
+async def run_monitor(model_id: str, db: AsyncSession = Depends(get_db)):
     model = await db.get(ModelInventory, model_id)
 
     if not model:
@@ -138,6 +127,7 @@ async def run_monitor(
         "audit_log_entries": [],
         "errors": [],
         "reason": [],
+        "force_monitoring": True,
     }
 
     state = await supervisor.run(state)
@@ -152,13 +142,12 @@ async def run_monitor(
         )
     )
 
-    audit = AuditLog(
+    db.add(AuditLog(
         model_id=model_id,
         event_type="monitoring_run",
         event_payload=state,
-    )
+    ))
 
-    db.add(audit)
     await db.commit()
 
     await manager.broadcast({
@@ -169,26 +158,30 @@ async def run_monitor(
     return state
 
 
-# ✅ Dashboard list
+# ✅ Dashboard list (FIXED N+1)
 @router.get("/")
 async def list_models(db: AsyncSession = Depends(get_db)):
+    # ✅ fetch all models
     result = await db.execute(select(ModelInventory))
     models = result.scalars().all()
+
+    # ✅ ✅ fetch ALL incidents in ONE query
+    inc_result = await db.execute(select(JiraIncident))
+    all_incidents = inc_result.scalars().all()
+
+    # ✅ group incidents by model_id
+    incident_map = {}
+    for inc in all_incidents:
+        incident_map.setdefault(inc.model_id, []).append(inc)
 
     response = []
 
     for model in models:
-        inc_result = await db.execute(
-            select(JiraIncident)
-            .where(JiraIncident.model_id == model.model_id)
-            .order_by(JiraIncident.created_at.desc())
-        )
-
-        incidents = inc_result.scalars().all()
+        incidents = incident_map.get(model.model_id, [])
 
         has_open_incidents = any(
-            incident.status != "approval"
-            for incident in incidents
+            inc.status != "approval"
+            for inc in incidents
         )
 
         response.append({
@@ -206,24 +199,31 @@ async def list_models(db: AsyncSession = Depends(get_db)):
     return response
 
 
-# ✅ Model detail
+# ✅ Model detail (FIXED explanation source)
 @router.get("/{model_id}")
-async def get_model(
-    model_id: str,
-    db: AsyncSession = Depends(get_db),
-):
+async def get_model(model_id: str, db: AsyncSession = Depends(get_db)):
     model = await db.get(ModelInventory, model_id)
 
     if not model:
         return {"error": "Model not found"}
 
-    inc_result = await db.execute(
+    # ✅ incidents
+    incidents = (await db.execute(
         select(JiraIncident)
-        .where(JiraIncident.model_id == model.model_id)
+        .where(JiraIncident.model_id == model_id)
         .order_by(JiraIncident.created_at.desc())
-    )
+    )).scalars().all()
 
-    incidents = inc_result.scalars().all()
+    # ✅ latest audit (for explanations)
+    audit = (await db.execute(
+        select(AuditLog)
+        .where(AuditLog.model_id == model_id)
+        .order_by(desc(AuditLog.created_at))
+    )).scalars().first()
+
+    explanations = {}
+    if audit and audit.event_payload:
+        explanations = audit.event_payload.get("agent_explanations", {})
 
     return {
         "model_id": model.model_id,
@@ -232,14 +232,17 @@ async def get_model(
         "perf_psi": model.perf_psi,
         "sr117_compliant": model.sr117_compliant,
 
-        # ✅ FULL LIST OF JIRA TICKETS
+        # ✅ FIXED
+        "monitoring_explanation": explanations.get("monitoring"),
+        "regulatory_explanation": explanations.get("regulatory"),
+
         "incidents": [
             {
-                "key": incident.ticket_key,
-                "status": incident.status,
-                "validation_type": incident.validation_type,
-                "created_at": str(incident.created_at),
+                "key": inc.ticket_key,
+                "status": inc.status,
+                "validation_type": inc.validation_type,
+                "created_at": str(inc.created_at),
             }
-            for incident in incidents
-        ]
+            for inc in incidents
+        ],
     }

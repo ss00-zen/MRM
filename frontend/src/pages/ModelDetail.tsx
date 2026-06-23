@@ -29,32 +29,36 @@ const ModelDetail = () => {
   useEffect(() => {
     fetchModel();
 
-    if (!wsRef.current) {
-      const ws = new WebSocket("ws://127.0.0.1:8000/ws/models");
+    if (wsRef.current) return; // ✅ prevent multiple connections
 
-      ws.onopen = async () => {
-        console.log("✅ WS connected (detail)");
-        await fetchModel(); // ✅ refresh on connect
-      };
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws/models");
 
-      ws.onmessage = async (event) => {
-        const msg = JSON.parse(event.data);
+    ws.onopen = () => {
+      console.log("✅ WS connected (detail)");
+    };
 
-        if (msg.type === "model_update" && msg.model_id === model_id) {
-          console.log("🔄 Updating model detail...");
-          await fetchModel();
-        }
-      };
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data);
 
-      ws.onclose = () => {
-        console.log("❌ WS closed (detail)");
-      };
+      if (msg.type === "model_update" && msg.model_id === model_id) {
+        console.log("🔄 Updating model detail...");
+        await fetchModel();
+      }
+    };
 
-      wsRef.current = ws;
-    }
+    ws.onclose = () => {
+      console.log("❌ WS closed (detail)");
+      wsRef.current = null;
+    };
+
+    ws.onerror = (err) => {
+      console.error("❌ WS error:", err);
+    };
+
+    wsRef.current = ws;
 
     return () => {
-      wsRef.current?.close();
+      ws.close();
       wsRef.current = null;
     };
   }, [model_id]);
@@ -74,7 +78,41 @@ const ModelDetail = () => {
         {model.sr117_compliant ? "✅" : "❌"}
       </p>
 
-      {/* ✅ Jira Tickets Section */}
+      {/* ✅ Monitoring Explanation */}
+      <h3 style={{ marginTop: "20px" }}>Monitoring Explanation</h3>
+      {model.monitoring_explanation ? (
+        <pre
+          style={{
+            background: "#f5f5f5",
+            padding: "10px",
+            borderRadius: "6px",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {JSON.stringify(model.monitoring_explanation, null, 2)}
+        </pre>
+      ) : (
+        <p>No monitoring explanation available</p>
+      )}
+
+      {/* ✅ Regulatory Explanation */}
+      <h3 style={{ marginTop: "20px" }}>Regulatory Explanation</h3>
+      {model.regulatory_explanation ? (
+        <pre
+          style={{
+            background: "#f5f5f5",
+            padding: "10px",
+            borderRadius: "6px",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {JSON.stringify(model.regulatory_explanation, null, 2)}
+        </pre>
+      ) : (
+        <p>No regulatory explanation available</p>
+      )}
+
+      {/* ✅ Jira Tickets */}
       <h3 style={{ marginTop: "20px" }}>Jira Tickets</h3>
 
       {!model.incidents || model.incidents.length === 0 ? (
@@ -96,10 +134,7 @@ const ModelDetail = () => {
                 <td>{ticket.validation_type}</td>
                 <td
                   style={{
-                    color:
-                      ticket.status === "approval"
-                        ? "green"
-                        : "red",
+                    color: ticket.status === "approval" ? "green" : "red",
                     fontWeight: "bold",
                   }}
                 >

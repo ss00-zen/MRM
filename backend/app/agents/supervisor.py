@@ -131,6 +131,7 @@ class SupervisorAgent:
 
     async def supervisor_node(self, state: MRMState) -> dict:
         print(f"[Supervisor] Routing model {state.get('model_id')}")
+        print("STATE BEFORE ROUTING:", state)
 
         state.setdefault("reason", [])
         state.setdefault("model_metadata", None)
@@ -140,31 +141,47 @@ class SupervisorAgent:
         state.setdefault("sr117_compliant", False)
         state.setdefault("agent_explanations", {})
 
-        if not state.get("model_metadata") and not state.get("inventory_ran", False):
-            state["reason"].append("Routing -> inventory")
-            state["next_agent"] = "inventory"
-            return state
-
-        if not state.get("monitoring_ran", False):
-            state["reason"].append("Routing -> monitoring")
+        # ✅ ✅ CRITICAL FIX: FORCE MONITORING (for /monitor API)
+        if state.get("force_monitoring", False):
+            print("➡ FORCE routing to monitoring")
+            state["reason"].append("Force → monitoring")
             state["next_agent"] = "monitoring"
             return state
 
+        # ✅ Inventory
+        if not state.get("model_metadata") and not state.get("inventory_ran", False):
+            print("➡ Routing to inventory")
+            state["reason"].append("Routing → inventory")
+            state["next_agent"] = "inventory"
+            return state
+
+        # ✅ Monitoring
+        if not state.get("monitoring_ran", False):
+            print("➡ Routing to monitoring")
+            state["reason"].append("Routing → monitoring")
+            state["next_agent"] = "monitoring"
+            return state
+
+        # ✅ Validation
         if (
             state.get("threshold_breached")
             and state.get("jira_ticket_key")
             and state.get("validation_status") != "approval"
             and not state.get("validation_ran", False)
         ):
-            state["reason"].append("Routing -> validation")
+            print("➡ Routing to validation")
+            state["reason"].append("Routing → validation")
             state["next_agent"] = "validation"
             return state
 
+        # ✅ Regulatory
         if not state.get("regulatory_ran", False):
-            state["reason"].append("Routing -> regulatory")
+            print("➡ Routing to regulatory")
+            state["reason"].append("Routing → regulatory")
             state["next_agent"] = "regulatory"
             return state
 
+        print("➡ Finished workflow")
         state["reason"].append("Workflow complete")
         state["next_agent"] = "FINISH"
         return state
