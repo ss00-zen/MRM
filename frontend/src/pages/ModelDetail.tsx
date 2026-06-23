@@ -29,7 +29,7 @@ const ModelDetail = () => {
   useEffect(() => {
     fetchModel();
 
-    if (wsRef.current) return; // ✅ prevent multiple connections
+    if (wsRef.current) return; // ✅ prevent duplicates
 
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/models");
 
@@ -46,13 +46,13 @@ const ModelDetail = () => {
       }
     };
 
+    ws.onerror = (err) => {
+      console.error("❌ WS error:", err);
+    };
+
     ws.onclose = () => {
       console.log("❌ WS closed (detail)");
       wsRef.current = null;
-    };
-
-    ws.onerror = (err) => {
-      console.error("❌ WS error:", err);
     };
 
     wsRef.current = ws;
@@ -78,34 +78,45 @@ const ModelDetail = () => {
         {model.sr117_compliant ? "✅" : "❌"}
       </p>
 
-      {/* ✅ Monitoring Explanation */}
+      {/* ✅ Monitoring */}
       <h3 style={{ marginTop: "20px" }}>Monitoring Explanation</h3>
       {model.monitoring_explanation ? (
-        <pre
-          style={{
-            background: "#f5f5f5",
-            padding: "10px",
-            borderRadius: "6px",
-            whiteSpace: "pre-wrap",
-          }}
-        >
+        <pre style={{
+          background: "#f5f5f5",
+          padding: "10px",
+          borderRadius: "6px",
+          whiteSpace: "pre-wrap"
+        }}>
           {JSON.stringify(model.monitoring_explanation, null, 2)}
         </pre>
       ) : (
         <p>No monitoring explanation available</p>
       )}
 
-      {/* ✅ Regulatory Explanation */}
+      {/* ✅ ✅ NEW: History Analysis */}
+      <h3 style={{ marginTop: "20px" }}>History Analysis</h3>
+      {model.history_analysis ? (
+        <pre style={{
+          background: "#eef7ff",
+          padding: "10px",
+          borderRadius: "6px",
+          whiteSpace: "pre-wrap"
+        }}>
+          {JSON.stringify(model.history_analysis, null, 2)}
+        </pre>
+      ) : (
+        <p>No history analysis available</p>
+      )}
+
+      {/* ✅ Regulatory */}
       <h3 style={{ marginTop: "20px" }}>Regulatory Explanation</h3>
       {model.regulatory_explanation ? (
-        <pre
-          style={{
-            background: "#f5f5f5",
-            padding: "10px",
-            borderRadius: "6px",
-            whiteSpace: "pre-wrap",
-          }}
-        >
+        <pre style={{
+          background: "#f5f5f5",
+          padding: "10px",
+          borderRadius: "6px",
+          whiteSpace: "pre-wrap"
+        }}>
           {JSON.stringify(model.regulatory_explanation, null, 2)}
         </pre>
       ) : (

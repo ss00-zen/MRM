@@ -6,8 +6,10 @@ from langgraph.graph import END, StateGraph
 from app.agents.inventory_agent import InventoryAgent
 from app.agents.monitoring_agent import MonitoringAgent
 from app.agents.regulatory_agent import RegulatoryAgent
-from app.agents.tools import check_drift_threshold, regulatory_policy
 from app.agents.validation_agent import ValidationAgent
+from app.agents.history_analysis_agent import HistoryAnalysisAgent
+
+from app.agents.tools import check_drift_threshold, regulatory_policy
 
 
 class MRMState(TypedDict, total=False):
@@ -46,6 +48,7 @@ class MRMState(TypedDict, total=False):
     # Execution guards
     inventory_ran: bool
     monitoring_ran: bool
+    history_ran: bool   # ✅ NEW
     validation_ran: bool
     regulatory_ran: bool
 
@@ -54,8 +57,10 @@ class SupervisorAgent:
     def __init__(self):
         self.inventory = InventoryAgent()
         self.monitoring = MonitoringAgent()
+        self.history_analysis = HistoryAnalysisAgent()   # ✅ NEW
         self.validation = ValidationAgent()
         self.regulatory = RegulatoryAgent()
+
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -64,6 +69,7 @@ class SupervisorAgent:
         workflow.add_node("supervisor", self.supervisor_node)
         workflow.add_node("inventory", self.inventory_node)
         workflow.add_node("monitoring", self.monitoring_node)
+        workflow.add_node("history_analysis", self.history_analysis_node)  # ✅ NEW
         workflow.add_node("validation", self.validation_node)
         workflow.add_node("regulatory", self.regulatory_node)
 
@@ -75,6 +81,7 @@ class SupervisorAgent:
             {
                 "inventory": "inventory",
                 "monitoring": "monitoring",
+                "history_analysis": "history_analysis",  # ✅ NEW
                 "validation": "validation",
                 "regulatory": "regulatory",
                 "FINISH": END,
@@ -83,6 +90,7 @@ class SupervisorAgent:
 
         workflow.add_edge("inventory", "supervisor")
         workflow.add_edge("monitoring", "supervisor")
+        workflow.add_edge("history_analysis", "supervisor")  # ✅ NEW
         workflow.add_edge("validation", "supervisor")
         workflow.add_edge("regulatory", "supervisor")
 
@@ -118,6 +126,7 @@ class SupervisorAgent:
 
             "inventory_ran": state.get("inventory_ran", False),
             "monitoring_ran": state.get("monitoring_ran", False),
+            "history_ran": state.get("history_ran", False),  # ✅ NEW
             "validation_ran": state.get("validation_ran", False),
             "regulatory_ran": state.get("regulatory_ran", False),
         }
@@ -141,7 +150,7 @@ class SupervisorAgent:
         state.setdefault("sr117_compliant", False)
         state.setdefault("agent_explanations", {})
 
-        # ✅ ✅ CRITICAL FIX: FORCE MONITORING (for /monitor API)
+        # ✅ FORCE monitoring (manual trigger)
         if state.get("force_monitoring", False):
             print("➡ FORCE routing to monitoring")
             state["reason"].append("Force → monitoring")
@@ -160,6 +169,16 @@ class SupervisorAgent:
             print("➡ Routing to monitoring")
             state["reason"].append("Routing → monitoring")
             state["next_agent"] = "monitoring"
+            return state
+
+        # ✅ ✅ History Analysis (NEW STEP)
+        if (
+            state.get("monitoring_ran")
+            and not state.get("history_ran", False)
+        ):
+            print("➡ Routing to history_analysis")
+            state["reason"].append("Routing → history_analysis")
+            state["next_agent"] = "history_analysis"
             return state
 
         # ✅ Validation
@@ -209,7 +228,6 @@ class SupervisorAgent:
         updated_state = context["state"]
         updated_state["inventory_ran"] = True
         updated_state["next_agent"] = "supervisor"
-
         return updated_state
 
     async def monitoring_node(self, state: MRMState) -> dict:
@@ -219,7 +237,16 @@ class SupervisorAgent:
         updated_state = context["state"]
         updated_state["monitoring_ran"] = True
         updated_state["next_agent"] = "supervisor"
+        return updated_state
 
+    # ✅ NEW NODE
+    async def history_analysis_node(self, state: MRMState) -> dict:
+        context = self._make_context(state)
+        context = await self.history_analysis.run(context)
+
+        updated_state = context["state"]
+        updated_state["history_ran"] = True
+        updated_state["next_agent"] = "supervisor"
         return updated_state
 
     async def validation_node(self, state: MRMState) -> dict:
@@ -229,7 +256,6 @@ class SupervisorAgent:
         updated_state = context["state"]
         updated_state["validation_ran"] = True
         updated_state["next_agent"] = "supervisor"
-
         return updated_state
 
     async def regulatory_node(self, state: MRMState) -> dict:
@@ -239,5 +265,4 @@ class SupervisorAgent:
         updated_state = context["state"]
         updated_state["regulatory_ran"] = True
         updated_state["next_agent"] = "supervisor"
-
         return updated_state

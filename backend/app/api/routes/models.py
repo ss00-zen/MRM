@@ -235,6 +235,7 @@ async def get_model(model_id: str, db: AsyncSession = Depends(get_db)):
         # ✅ FIXED
         "monitoring_explanation": explanations.get("monitoring"),
         "regulatory_explanation": explanations.get("regulatory"),
+        "history_analysis": explanations.get("history_analysis"),
 
         "incidents": [
             {
