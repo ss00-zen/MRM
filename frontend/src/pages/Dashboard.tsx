@@ -12,20 +12,28 @@ const Dashboard = () => {
       const data = await res.json();
       setModels(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error(err);
+      console.error("Error fetching models:", err);
       setModels([]);
     }
   };
 
   useEffect(() => {
+    // ✅ Initial load
     fetchModels();
+
+    // ✅ Polling fallback (handles missed WebSocket events)
+    const interval = setInterval(() => {
+      fetchModels();
+    }, 3000);
+
+    return () => clearInterval(interval);
   }, []);
 
   return (
     <div style={{ padding: "20px" }}>
       <h2>Model Dashboard</h2>
 
-      {/* ✅ Navigation buttons */}
+      {/* Navigation buttons */}
       <div style={{ marginBottom: "15px", display: "flex", gap: "10px" }}>
         <button onClick={() => navigate("/validation")}>
           Validation Queue
@@ -35,11 +43,9 @@ const Dashboard = () => {
           Drift Monitor
         </button>
 
-        
         <button onClick={() => navigate("/regulatory")}>
           Regulatory
         </button>
-
       </div>
 
       <ModelsTable models={models} refresh={fetchModels} />

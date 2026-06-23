@@ -11,7 +11,7 @@ class ValidationAgent:
 
         print("[Validation Agent]")
 
-        # ✅ Ensure fields exist
+        # Ensure required fields exist
         state.setdefault("jira_ticket_key", None)
         state.setdefault("validation_status", "draft")
         state.setdefault("audit_log_entries", [])
@@ -19,54 +19,66 @@ class ValidationAgent:
         state.setdefault("errors", [])
 
         try:
-            # ✅ 1. If no incident → DO NOTHING
-            if not state.get("jira_ticket_key"):
+            jira_ticket_key = state.get("jira_ticket_key")
+
+            # 1. No incident → skip
+            if not jira_ticket_key:
                 state["reason"].append(
-                    "No active validation incident → skipping validation"
+                    "No active validation incident -> skipping validation"
                 )
                 return context
 
-            # ✅ 2. ALWAYS fetch current status from Jira
-            current = await self.jira_client.get_ticket_status(
-                state["jira_ticket_key"]
-            )
+            # 2. Fetch latest Jira status
+            current = await self.jira_client.get_ticket_status(jira_ticket_key)
+
+            if not isinstance(current, dict):
+                raise Exception("Invalid Jira ticket response")
 
             current_status = current.get("status", "intake")
 
-            print("📡 Jira current status:", current_status)
+            print("Jira current status:", current_status)
 
-            # ✅ ✅ CRITICAL FIX
-            # Always sync Jira status → state
+            # Sync Jira → state
             state["validation_status"] = current_status
 
-            # ✅ 3. Lifecycle progression
+            # ✅ Terminal condition
+            if current_status == "approval":
+                state["reason"].append("Validation already approved")
+                return context
+
+            # 3. Lifecycle progression
             next_stage = {
                 "intake": "draft",
                 "draft": "testing",
                 "testing": "docs_review",
                 "docs_review": "approval",
-                "approval": "approval",  # terminal
+                "approval": "approval",
             }
 
             new_status = next_stage.get(current_status, current_status)
 
-            # ✅ 4. Transition only if needed
+            # 4. Transition only if needed
             if new_status != current_status:
-                print(f"📤 Transitioning {current_status} → {new_status}")
+                print(f"Transitioning {current_status} -> {new_status}")
 
                 updated = await self.jira_client.transition_state(
-                    state["jira_ticket_key"],
+                    jira_ticket_key,
                     new_status
                 )
 
-                state["validation_status"] = updated["status"]
+                if not isinstance(updated, dict):
+                    raise Exception("Invalid Jira transition response")
+
+                updated_status = updated.get("status", new_status)
+
+                state["validation_status"] = updated_status
 
                 state["audit_log_entries"].append(
-                    f"JIRA-TRANSITION-{state['jira_ticket_key']}-{updated['status']}"
+                    f"JIRA-TRANSITION-{jira_ticket_key}-{updated_status}"
                 )
 
                 state["reason"].append(
-                    f"Validation progressed: {current_status} → {updated['status']}"
+                    f"Validation progressed: {current_status} -> {updated_status}"
                 )
 
             else:
@@ -75,12 +87,12 @@ class ValidationAgent:
                 )
 
         except Exception as e:
-            print("❌ VALIDATION ERROR:", str(e))
+            print("VALIDATION ERROR:", str(e))
 
             state["errors"].append(f"VAL-500: {str(e)}")
             state["reason"].append("Validation execution failed")
 
-        # ✅ Update memory
+        # Update memory
         memory["validation_runs"] = memory.get("validation_runs", 0) + 1
 
         context["state"] = state
