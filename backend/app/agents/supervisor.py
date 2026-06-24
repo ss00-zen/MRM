@@ -8,6 +8,7 @@ from app.agents.monitoring_agent import MonitoringAgent
 from app.agents.regulatory_agent import RegulatoryAgent
 from app.agents.validation_agent import ValidationAgent
 from app.agents.history_analysis_agent import HistoryAnalysisAgent
+from app.agents.dashboard_analysis_agent import DashboardAnalysisAgent  # ✅ NEW
 
 from app.agents.tools import check_drift_threshold, regulatory_policy
 
@@ -48,7 +49,8 @@ class MRMState(TypedDict, total=False):
     # Execution guards
     inventory_ran: bool
     monitoring_ran: bool
-    history_ran: bool   # ✅ NEW
+    history_ran: bool
+    dashboard_ran: bool  # ✅ NEW
     validation_ran: bool
     regulatory_ran: bool
 
@@ -57,7 +59,8 @@ class SupervisorAgent:
     def __init__(self):
         self.inventory = InventoryAgent()
         self.monitoring = MonitoringAgent()
-        self.history_analysis = HistoryAnalysisAgent()   # ✅ NEW
+        self.history_analysis = HistoryAnalysisAgent()
+        self.dashboard_analysis = DashboardAnalysisAgent()  # ✅ NEW
         self.validation = ValidationAgent()
         self.regulatory = RegulatoryAgent()
 
@@ -69,7 +72,8 @@ class SupervisorAgent:
         workflow.add_node("supervisor", self.supervisor_node)
         workflow.add_node("inventory", self.inventory_node)
         workflow.add_node("monitoring", self.monitoring_node)
-        workflow.add_node("history_analysis", self.history_analysis_node)  # ✅ NEW
+        workflow.add_node("history_analysis", self.history_analysis_node)
+        workflow.add_node("dashboard_analysis", self.dashboard_node)  # ✅ NEW
         workflow.add_node("validation", self.validation_node)
         workflow.add_node("regulatory", self.regulatory_node)
 
@@ -81,7 +85,8 @@ class SupervisorAgent:
             {
                 "inventory": "inventory",
                 "monitoring": "monitoring",
-                "history_analysis": "history_analysis",  # ✅ NEW
+                "history_analysis": "history_analysis",
+                "dashboard_analysis": "dashboard_analysis",  # ✅ NEW
                 "validation": "validation",
                 "regulatory": "regulatory",
                 "FINISH": END,
@@ -90,7 +95,8 @@ class SupervisorAgent:
 
         workflow.add_edge("inventory", "supervisor")
         workflow.add_edge("monitoring", "supervisor")
-        workflow.add_edge("history_analysis", "supervisor")  # ✅ NEW
+        workflow.add_edge("history_analysis", "supervisor")
+        workflow.add_edge("dashboard_analysis", "supervisor")  # ✅ NEW
         workflow.add_edge("validation", "supervisor")
         workflow.add_edge("regulatory", "supervisor")
 
@@ -126,14 +132,15 @@ class SupervisorAgent:
 
             "inventory_ran": state.get("inventory_ran", False),
             "monitoring_ran": state.get("monitoring_ran", False),
-            "history_ran": state.get("history_ran", False),  # ✅ NEW
+            "history_ran": state.get("history_ran", False),
+            "dashboard_ran": state.get("dashboard_ran", False),  # ✅ NEW
             "validation_ran": state.get("validation_ran", False),
             "regulatory_ran": state.get("regulatory_ran", False),
         }
 
         result = await self.graph.ainvoke(
             normalized_state,
-            config={"recursion_limit": 12},
+            config={"recursion_limit": 15},
         )
 
         return dict(result)
@@ -143,65 +150,50 @@ class SupervisorAgent:
         print("STATE BEFORE ROUTING:", state)
 
         state.setdefault("reason", [])
-        state.setdefault("model_metadata", None)
-        state.setdefault("validation_status", "draft")
-        state.setdefault("jira_ticket_key", None)
-        state.setdefault("threshold_breached", False)
-        state.setdefault("sr117_compliant", False)
         state.setdefault("agent_explanations", {})
 
-        # ✅ FORCE monitoring (manual trigger)
-        if state.get("force_monitoring", False):
-            print("➡ FORCE routing to monitoring")
-            state["reason"].append("Force → monitoring")
-            state["next_agent"] = "monitoring"
-            return state
-
         # ✅ Inventory
-        if not state.get("model_metadata") and not state.get("inventory_ran", False):
-            print("➡ Routing to inventory")
-            state["reason"].append("Routing → inventory")
+        if not state.get("model_metadata") and not state.get("inventory_ran"):
             state["next_agent"] = "inventory"
             return state
 
         # ✅ Monitoring
-        if not state.get("monitoring_ran", False):
-            print("➡ Routing to monitoring")
-            state["reason"].append("Routing → monitoring")
+        if not state.get("monitoring_ran"):
             state["next_agent"] = "monitoring"
             return state
 
-        # ✅ ✅ History Analysis (NEW STEP)
-        if (
-            state.get("monitoring_ran")
-            and not state.get("history_ran", False)
-        ):
-            print("➡ Routing to history_analysis")
-            state["reason"].append("Routing → history_analysis")
+        # ✅ History Analysis
+        if state.get("monitoring_ran") and not state.get("history_ran"):
             state["next_agent"] = "history_analysis"
             return state
+
+        # ✅ ✅ Dashboard Analysis (NEW)
+        
+        if (
+            state.get("monitoring_ran")   # ✅ stronger condition
+            and not state.get("dashboard_ran", False)
+        ):
+            print("➡ Routing to dashboard_analysis")  # ✅ DEBUG LOG
+            state["reason"].append("Routing → dashboard_analysis")
+            state["next_agent"] = "dashboard_analysis"
+            return state
+
 
         # ✅ Validation
         if (
             state.get("threshold_breached")
             and state.get("jira_ticket_key")
             and state.get("validation_status") != "approval"
-            and not state.get("validation_ran", False)
+            and not state.get("validation_ran")
         ):
-            print("➡ Routing to validation")
-            state["reason"].append("Routing → validation")
             state["next_agent"] = "validation"
             return state
 
         # ✅ Regulatory
-        if not state.get("regulatory_ran", False):
-            print("➡ Routing to regulatory")
-            state["reason"].append("Routing → regulatory")
+        if not state.get("regulatory_ran"):
             state["next_agent"] = "regulatory"
             return state
 
-        print("➡ Finished workflow")
-        state["reason"].append("Workflow complete")
         state["next_agent"] = "FINISH"
         return state
 
@@ -211,10 +203,7 @@ class SupervisorAgent:
     def _make_context(self, state: MRMState) -> dict:
         return {
             "state": state,
-            "memory": {
-                "validation_runs": 0,
-                "last_drift": state.get("drift_score", 0.0),
-            },
+            "memory": {"last_drift": state.get("drift_score")},
             "tools": {
                 "check_drift": check_drift_threshold,
                 "policy": regulatory_policy(),
@@ -222,47 +211,44 @@ class SupervisorAgent:
         }
 
     async def inventory_node(self, state: MRMState) -> dict:
-        context = self._make_context(state)
-        context = await self.inventory.run(context)
-
-        updated_state = context["state"]
-        updated_state["inventory_ran"] = True
-        updated_state["next_agent"] = "supervisor"
-        return updated_state
+        context = await self.inventory.run(self._make_context(state))
+        state = context["state"]
+        state["inventory_ran"] = True
+        state["next_agent"] = "supervisor"
+        return state
 
     async def monitoring_node(self, state: MRMState) -> dict:
-        context = self._make_context(state)
-        context = await self.monitoring.run(context)
+        context = await self.monitoring.run(self._make_context(state))
+        state = context["state"]
+        state["monitoring_ran"] = True
+        state["next_agent"] = "supervisor"
+        return state
 
-        updated_state = context["state"]
-        updated_state["monitoring_ran"] = True
-        updated_state["next_agent"] = "supervisor"
-        return updated_state
-
-    # ✅ NEW NODE
     async def history_analysis_node(self, state: MRMState) -> dict:
-        context = self._make_context(state)
-        context = await self.history_analysis.run(context)
+        context = await self.history_analysis.run(self._make_context(state))
+        state = context["state"]
+        state["history_ran"] = True
+        state["next_agent"] = "supervisor"
+        return state
 
-        updated_state = context["state"]
-        updated_state["history_ran"] = True
-        updated_state["next_agent"] = "supervisor"
-        return updated_state
+    # ✅ NEW DASHBOARD NODE
+    async def dashboard_node(self, state: MRMState) -> dict:
+        context = await self.dashboard_analysis.run(self._make_context(state))
+        state = context["state"]
+        state["dashboard_ran"] = True
+        state["next_agent"] = "supervisor"
+        return state
 
     async def validation_node(self, state: MRMState) -> dict:
-        context = self._make_context(state)
-        context = await self.validation.run(context)
-
-        updated_state = context["state"]
-        updated_state["validation_ran"] = True
-        updated_state["next_agent"] = "supervisor"
-        return updated_state
+        context = await self.validation.run(self._make_context(state))
+        state = context["state"]
+        state["validation_ran"] = True
+        state["next_agent"] = "supervisor"
+        return state
 
     async def regulatory_node(self, state: MRMState) -> dict:
-        context = self._make_context(state)
-        context = await self.regulatory.run(context)
-
-        updated_state = context["state"]
-        updated_state["regulatory_ran"] = True
-        updated_state["next_agent"] = "supervisor"
-        return updated_state
+        context = await self.regulatory.run(self._make_context(state))
+        state = context["state"]
+        state["regulatory_ran"] = True
+        state["next_agent"] = "supervisor"
+        return state

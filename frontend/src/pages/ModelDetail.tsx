@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 
 const ModelDetail = () => {
   const { model_id } = useParams();
+  const navigate = useNavigate(); // ✅ NEW
   const wsRef = useRef<WebSocket | null>(null);
 
   const [model, setModel] = useState<any>(null);
@@ -26,10 +27,14 @@ const ModelDetail = () => {
     );
   };
 
+  const goToDashboard = () => {
+    navigate(`/models/${model_id}/dashboard`);
+  };
+
   useEffect(() => {
     fetchModel();
 
-    if (wsRef.current) return; // ✅ prevent duplicates
+    if (wsRef.current) return;
 
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/models");
 
@@ -51,7 +56,6 @@ const ModelDetail = () => {
     };
 
     ws.onclose = () => {
-      console.log("❌ WS closed (detail)");
       wsRef.current = null;
     };
 
@@ -71,8 +75,17 @@ const ModelDetail = () => {
 
       <button onClick={runMonitor}>Monitor</button>
 
+      {/* ✅ NEW DASHBOARD BUTTON */}
+      <button
+        onClick={goToDashboard}
+        style={{ marginLeft: "10px" }}
+      >
+        View Dashboard
+      </button>
+
       <p><b>Model Type:</b> {model.model_type}</p>
       <p><b>PSI:</b> {model.perf_psi}</p>
+
       <p>
         <b>SR 11-7 Compliance:</b>{" "}
         {model.sr117_compliant ? "✅" : "❌"}
@@ -93,7 +106,7 @@ const ModelDetail = () => {
         <p>No monitoring explanation available</p>
       )}
 
-      {/* ✅ ✅ NEW: History Analysis */}
+      {/* ✅ History Analysis */}
       <h3 style={{ marginTop: "20px" }}>History Analysis</h3>
       {model.history_analysis ? (
         <pre style={{

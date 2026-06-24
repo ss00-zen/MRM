@@ -86,7 +86,7 @@ const ModelsTable = ({ models = [], refresh }: any) => {
                 Monitor
               </button>
 
-              <button onClick={() => navigate(`/model/${m.model_id}`)}>
+              <button onClick={() => navigate(`/models/${m.model_id}`)}>
                 View
               </button>
             </td>
